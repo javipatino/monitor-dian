@@ -6,7 +6,8 @@ Corre en GitHub Actions (ver .github/workflows/monitor.yml).
 
 Variables de entorno (en GitHub: Settings > Secrets and variables > Actions):
   TELEGRAM_TOKEN    token del bot (de @BotFather)
-  TELEGRAM_CHAT_ID  tu chat id
+  TELEGRAM_CHAT_ID  chat ids separados por coma. El primero (tú) recibe todo;
+                    los demás solo reciben la alerta de ABIERTO.
   HEADLESS=0        (opcional, solo local) para ver el navegador
 
 Uso:
@@ -33,7 +34,8 @@ from playwright.sync_api import sync_playwright, TimeoutError as PWTimeout
 
 URL = "https://agendamiento.dian.gov.co/"
 TOKEN = os.environ.get("TELEGRAM_TOKEN", "")
-CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
+CHAT_IDS = [c.strip() for c in os.environ.get("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
+CHAT_ID = CHAT_IDS[0] if CHAT_IDS else ""
 HEADLESS = os.environ.get("HEADLESS", "1") != "0"
 TZ = ZoneInfo("America/Bogota")
 HORA_HEARTBEAT = 8  # hora local desde la que se manda el "sigue vivo" diario
@@ -46,11 +48,11 @@ NO_HAY = re.compile(r"No se encontraron especialidades", re.I)
 
 
 # ---------------- Telegram ----------------
-def tg_text(msg: str, silencioso: bool = False):
+def tg_text(msg: str, silencioso: bool = False, chat_id: str = None):
     r = requests.post(
         f"https://api.telegram.org/bot{TOKEN}/sendMessage",
         data={
-            "chat_id": CHAT_ID,
+            "chat_id": chat_id or CHAT_ID,
             "text": msg[:4000],
             "disable_notification": "true" if silencioso else "false",
         },
@@ -59,11 +61,11 @@ def tg_text(msg: str, silencioso: bool = False):
     r.raise_for_status()
 
 
-def tg_photo(path: pathlib.Path, caption: str):
+def tg_photo(path: pathlib.Path, caption: str, chat_id: str = None):
     with open(path, "rb") as f:
         r = requests.post(
             f"https://api.telegram.org/bot{TOKEN}/sendPhoto",
-            data={"chat_id": CHAT_ID, "caption": caption},
+            data={"chat_id": chat_id or CHAT_ID, "caption": caption},
             files={"photo": f},
             timeout=30,
         )
@@ -139,7 +141,12 @@ def main():
         sys.exit(1)
 
     if "--test" in sys.argv:
-        tg_text("Prueba del monitor DIAN ✅ (desde la nube)")
+        for cid in CHAT_IDS:
+            try:
+                tg_text("Prueba del monitor DIAN ✅ (desde la nube)", chat_id=cid)
+                print(f"prueba enviada a {cid}")
+            except Exception as e:
+                print(f"no se pudo enviar a {cid}: {e} (¿ya le dio /start al bot?)")
         return
 
     now = datetime.datetime.now(TZ)
@@ -169,10 +176,14 @@ def main():
 
     if resultado == "abierto":
         aviso = "🚨🟢 DEVOLUCIONES ABIERTAS 🟢🚨\nhttps://agendamiento.dian.gov.co/"
-        if SHOT.exists():
-            tg_photo(SHOT, aviso)
-        else:
-            tg_text(aviso)
+        for cid in CHAT_IDS:
+            try:
+                if SHOT.exists():
+                    tg_photo(SHOT, aviso, chat_id=cid)
+                else:
+                    tg_text(aviso, chat_id=cid)
+            except Exception as e:
+                print(f"no se pudo avisar a {cid}: {e}")
     elif previo == "error":
         tg_text("✅ Monitor DIAN funcionando de nuevo (cerrado)", silencioso=True)
 
