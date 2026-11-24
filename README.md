@@ -4,7 +4,7 @@ Revisa cada 10 minutos si hay citas de **Videoatención > Devoluciones** (person
 
 - **Abierto** → alerta con sonido y captura.
 - **Error** → un aviso (no se repite hasta que se arregle).
-- **Diario** → mensaje silencioso de "sigue vivo".
+- **Cerrado** → mensaje silencioso en cada revisión (solo al primer chat id).
 
 Corre en GitHub Actions. Necesita dos secrets en *Settings → Secrets and variables → Actions*: `TELEGRAM_TOKEN` y `TELEGRAM_CHAT_ID`.
 

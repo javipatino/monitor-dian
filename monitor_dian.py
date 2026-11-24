@@ -17,8 +17,7 @@ Uso:
 Avisos:
   - abierto  -> alerta con sonido + captura (en cada revisión mientras siga abierto)
   - error    -> un solo aviso hasta que vuelva a funcionar
-  - 1 vez al día (desde las 8 a. m.) -> "sigue vivo" silencioso, para saber que corre
-  - cerrado  -> no avisa
+  - cerrado  -> mensaje silencioso en cada revisión (solo al primer chat id)
 """
 import os
 import re
@@ -38,7 +37,6 @@ CHAT_IDS = [c.strip() for c in os.environ.get("TELEGRAM_CHAT_ID", "").split(",")
 CHAT_ID = CHAT_IDS[0] if CHAT_IDS else ""
 HEADLESS = os.environ.get("HEADLESS", "1") != "0"
 TZ = ZoneInfo("America/Bogota")
-HORA_HEARTBEAT = 8  # hora local desde la que se manda el "sigue vivo" diario
 
 BASE = pathlib.Path(__file__).resolve().parent
 STATE_FILE = BASE / "estado_dian.json"
@@ -151,7 +149,6 @@ def main():
 
     now = datetime.datetime.now(TZ)
     ahora = now.strftime("%Y-%m-%d %H:%M:%S")
-    hoy = now.strftime("%Y-%m-%d")
     state = load_state()
     previo = state.get("estado")
 
@@ -184,13 +181,10 @@ def main():
                     tg_text(aviso, chat_id=cid)
             except Exception as e:
                 print(f"no se pudo avisar a {cid}: {e}")
-    elif previo == "error":
-        tg_text("✅ Monitor DIAN funcionando de nuevo (cerrado)", silencioso=True)
-
-    # "Sigue vivo" una vez al día
-    if now.hour >= HORA_HEARTBEAT and state.get("heartbeat") != hoy:
-        tg_text(f"🤖 Monitor DIAN activo. Última revisión {ahora}: {resultado}", silencioso=True)
-        state["heartbeat"] = hoy
+    else:
+        # "cerrado" en cada revisión, sin sonido, solo a ti (el primer chat id)
+        extra = " (funcionando de nuevo)" if previo == "error" else ""
+        tg_text(f"🔴 cerrado · {now.strftime('%H:%M')}{extra}", silencioso=True)
 
     state["estado"] = resultado
     save_state(state)
