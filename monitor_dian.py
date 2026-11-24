@@ -17,7 +17,9 @@ Uso:
 Avisos:
   - abierto  -> alerta con sonido + captura (en cada revisión mientras siga abierto)
   - error    -> un solo aviso hasta que vuelva a funcionar
-  - cerrado  -> mensaje silencioso en cada revisión (solo al primer chat id)
+  - cada 6 h (00, 06, 12, 18 hora Bogotá) -> resumen silencioso: corridas,
+                cerrado/abierto/error (solo al primer chat id)
+  - cerrado  -> no avisa (va en el resumen)
 """
 import os
 import re
@@ -132,6 +134,56 @@ def revisar() -> str:
             browser.close()
 
 
+# ---------------- Reporte cada 6 horas ----------------
+HORAS_REPORTE = 6
+ESPERADAS = HORAS_REPORTE * 6  # una corrida cada 10 min
+
+
+def bloque_de(now: datetime.datetime) -> str:
+    """Bloques fijos de 6 h en hora Bogotá: 00-06, 06-12, 12-18, 18-24."""
+    return f"{now:%Y-%m-%d}T{now.hour // HORAS_REPORTE * HORAS_REPORTE:02d}"
+
+
+def stats_vacias() -> dict:
+    return {"total": 0, "cerrado": 0, "abierto": 0, "error": 0, "ultima": ""}
+
+
+def reporte_si_toca(state: dict, now: datetime.datetime):
+    """Si cambiamos de bloque, manda el resumen del bloque anterior y reinicia."""
+    actual = bloque_de(now)
+    anterior = state.get("bloque")
+    if anterior is None:
+        state["bloque"], state["stats"] = actual, stats_vacias()
+        return
+    if anterior == actual:
+        return
+    st = state.get("stats") or stats_vacias()
+    h = int(anterior[-2:])
+    rango = f"{anterior[:10]} {h:02d}:00–{(h + HORAS_REPORTE) % 24:02d}:00"
+    msg = (
+        f"📊 Monitor DIAN · {rango}\n"
+        f"Corridas: {st['total']} de ~{ESPERADAS}\n"
+        f"🔴 cerrado: {st['cerrado']}\n"
+        f"🟢 abierto: {st['abierto']}\n"
+        f"⚠️ error: {st['error']}\n"
+        f"Última: {st['ultima'] or '—'}"
+    )
+    try:
+        tg_text(msg, silencioso=True)
+    except Exception as e:
+        print(f"no se pudo mandar el reporte: {e}")
+        return  # se reintenta en la próxima corrida
+    state["bloque"], state["stats"] = actual, stats_vacias()
+
+
+def registrar(state: dict, resultado: str, now: datetime.datetime):
+    st = state.setdefault("stats", stats_vacias())
+    st["total"] += 1
+    st[resultado] = st.get(resultado, 0) + 1
+    st["ultima"] = f"{now:%H:%M} {resultado}"
+    state["estado"] = resultado
+
+
 # ---------------- Main ----------------
 def main():
     if not TOKEN or not CHAT_ID:
@@ -152,11 +204,15 @@ def main():
     state = load_state()
     previo = state.get("estado")
 
+    # Primero cierra el bloque anterior (si cambió), luego cuenta esta corrida
+    reporte_si_toca(state, now)
+
     try:
         resultado = revisar()
         if resultado == "abierto":
             # Doble verificación: evita falsos positivos cuando la página está lenta
-            shutil.copy(SHOT, BASE / "dian_sospechoso.png")
+            if SHOT.exists():
+                shutil.copy(SHOT, BASE / "dian_sospechoso.png")
             resultado = revisar()
             if resultado != "abierto":
                 print(f"[{ahora}] falso positivo descartado (ver dian_sospechoso.png)")
@@ -164,12 +220,17 @@ def main():
         print(f"[{ahora}] ERROR: {e}")
         # Avisa del error solo una vez seguida
         if previo != "error":
-            tg_text(f"⚠️ Monitor DIAN falló (revisar selectores/página): {type(e).__name__}: {str(e)[:500]}")
-        state["estado"] = "error"
+            try:
+                tg_text(f"⚠️ Monitor DIAN falló (revisar selectores/página): {type(e).__name__}: {str(e)[:500]}")
+            except Exception as e2:
+                print(f"no se pudo avisar el error: {e2}")
+        registrar(state, "error", now)
         save_state(state)
         return  # salida 0: así GitHub no te manda un correo por cada fallo
 
     print(f"[{ahora}] {resultado}")
+    registrar(state, resultado, now)
+    save_state(state)
 
     if resultado == "abierto":
         aviso = "🚨🟢 DEVOLUCIONES ABIERTAS 🟢🚨\nhttps://agendamiento.dian.gov.co/"
@@ -181,13 +242,6 @@ def main():
                     tg_text(aviso, chat_id=cid)
             except Exception as e:
                 print(f"no se pudo avisar a {cid}: {e}")
-    else:
-        # "cerrado" en cada revisión, sin sonido, solo a ti (el primer chat id)
-        extra = " (funcionando de nuevo)" if previo == "error" else ""
-        tg_text(f"🔴 cerrado · {now.strftime('%H:%M')}{extra}", silencioso=True)
-
-    state["estado"] = resultado
-    save_state(state)
 
 
 if __name__ == "__main__":
